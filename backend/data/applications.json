@@ -1,0 +1,30 @@
+[
+  {
+    "id": "app_71c34505",
+    "policy_id": "pol_pressure_standard",
+    "device_id": "dev2",
+    "applied_at": "2026-06-16T21:24:54.977092",
+    "applied_by": "auto_default"
+  },
+  {
+    "id": "app_50328a23",
+    "policy_id": "pol_motor_standard",
+    "device_id": "dev3",
+    "applied_at": "2026-06-16T21:24:54.977096",
+    "applied_by": "auto_default"
+  },
+  {
+    "id": "app_da26a4c7",
+    "policy_id": "pol_flow_standard",
+    "device_id": "dev4",
+    "applied_at": "2026-06-16T21:24:54.977099",
+    "applied_by": "auto_default"
+  },
+  {
+    "id": "app_e2b582ff",
+    "policy_id": "pol_temp_standard",
+    "device_id": "dev1",
+    "applied_at": "2026-06-16T21:25:41.942037",
+    "applied_by": "system"
+  }
+]

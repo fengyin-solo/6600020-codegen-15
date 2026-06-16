@@ -174,12 +174,11 @@ function hasRuleAlert(d: Device, r: ModbusRegister): boolean {
 onMounted(async () => {
   store.initMockDevices()
   try {
-    await Promise.all([
-      store.loadDeviceTypes(),
-      store.loadPolicies(),
-      store.loadApplications(),
-      store.loadAllDeviceRules()
-    ])
+    await store.loadDeviceTypes()
+    await store.registerDevicesToBackend()
+    await store.loadPolicies()
+    await store.loadApplications()
+    await store.loadAllDeviceRules()
   } catch (e) {
     console.warn('阈值策略API初始化跳过（后端未启动时可正常运行前端模拟逻辑）')
   }

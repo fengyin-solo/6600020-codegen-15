@@ -1,4 +1,6 @@
-"""Threshold Policy Service with in-memory storage (replace with DB for production)."""
+"""Threshold Policy Service with JSON file persistence and device type validation."""
+import json
+import os
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -11,10 +13,14 @@ from app.models.schemas import (
     AlarmLevel, ConditionOperator
 )
 
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+APPLICATIONS_FILE = os.path.join(DATA_DIR, "applications.json")
+
 DEVICE_TYPES: Dict[str, DeviceType] = {}
 POLICIES: Dict[str, ThresholdPolicy] = {}
 RULES: Dict[str, ThresholdRule] = {}
 APPLICATIONS: Dict[str, PolicyApplication] = {}
+DEVICE_TYPE_MAP: Dict[str, str] = {}
 
 
 def _gen_id(prefix: str) -> str:
@@ -25,12 +31,64 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def _ensure_data_dir():
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _save_applications():
+    _ensure_data_dir()
+    data = []
+    for a in APPLICATIONS.values():
+        data.append({
+            "id": a.id,
+            "policy_id": a.policy_id,
+            "device_id": a.device_id,
+            "applied_at": a.applied_at.isoformat() if isinstance(a.applied_at, datetime) else str(a.applied_at),
+            "applied_by": a.applied_by
+        })
+    with open(APPLICATIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_applications():
+    if not os.path.exists(APPLICATIONS_FILE):
+        return
+    try:
+        with open(APPLICATIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for item in data:
+            parsed_at = item.get("applied_at", datetime.now().isoformat())
+            if isinstance(parsed_at, str):
+                try:
+                    parsed_at = datetime.fromisoformat(parsed_at)
+                except (ValueError, TypeError):
+                    parsed_at = _now()
+            app = PolicyApplication(
+                id=item["id"],
+                policy_id=item["policy_id"],
+                device_id=item["device_id"],
+                applied_at=parsed_at,
+                applied_by=item.get("applied_by")
+            )
+            APPLICATIONS[app.id] = app
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+
+def register_device(device_id: str, device_type_id: str):
+    DEVICE_TYPE_MAP[device_id] = device_type_id
+
+
+def get_device_type_id(device_id: str) -> Optional[str]:
+    return DEVICE_TYPE_MAP.get(device_id)
+
+
 def init_mock_data():
-    """Initialize mock data for device types, policies, and rules."""
     DEVICE_TYPES.clear()
     POLICIES.clear()
     RULES.clear()
     APPLICATIONS.clear()
+    DEVICE_TYPE_MAP.clear()
 
     temp_sensor = DeviceType(
         id="dt_temp",
@@ -85,6 +143,11 @@ def init_mock_data():
         updated_at=_now()
     )
     DEVICE_TYPES[flow.id] = flow
+
+    register_device("dev1", "dt_temp")
+    register_device("dev2", "dt_pressure")
+    register_device("dev3", "dt_motor")
+    register_device("dev4", "dt_flow")
 
     policy1 = ThresholdPolicy(
         id="pol_temp_standard",
@@ -284,8 +347,38 @@ def init_mock_data():
     )
     RULES[rule4_2.id] = rule4_2
 
+    _load_applications()
 
-init_mock_data()
+    _auto_apply_defaults()
+
+
+def _auto_apply_defaults():
+    for dt_id, dt in DEVICE_TYPES.items():
+        default_policy = None
+        for p in POLICIES.values():
+            if p.device_type_id == dt_id and p.is_default:
+                default_policy = p
+                break
+        if not default_policy:
+            continue
+        for device_id, dev_dt_id in DEVICE_TYPE_MAP.items():
+            if dev_dt_id != dt_id:
+                continue
+            already_has = False
+            for a in APPLICATIONS.values():
+                if a.device_id == device_id:
+                    already_has = True
+                    break
+            if not already_has:
+                app = PolicyApplication(
+                    id=_gen_id("app"),
+                    policy_id=default_policy.id,
+                    device_id=device_id,
+                    applied_at=_now(),
+                    applied_by="auto_default"
+                )
+                APPLICATIONS[app.id] = app
+    _save_applications()
 
 
 def _populate_rules(policy: ThresholdPolicy) -> ThresholdPolicy:
@@ -331,6 +424,9 @@ def delete_device_type(dt_id: str) -> bool:
         for pid in list(POLICIES.keys()):
             if POLICIES[pid].device_type_id == dt_id:
                 delete_policy(pid)
+        for did in list(DEVICE_TYPE_MAP.keys()):
+            if DEVICE_TYPE_MAP[did] == dt_id:
+                del DEVICE_TYPE_MAP[did]
         return True
     return False
 
@@ -436,9 +532,13 @@ def delete_policy(policy_id: str) -> bool:
         for rid in list(RULES.keys()):
             if RULES[rid].policy_id == policy_id:
                 del RULES[rid]
+        changed = False
         for aid in list(APPLICATIONS.keys()):
             if APPLICATIONS[aid].policy_id == policy_id:
                 del APPLICATIONS[aid]
+                changed = True
+        if changed:
+            _save_applications()
         return True
     return False
 
@@ -454,6 +554,23 @@ def batch_apply_policy(policy_id: str, device_ids: List[str]) -> BatchApplyRespo
     failed_count = 0
 
     for did in device_ids:
+        dev_dt_id = DEVICE_TYPE_MAP.get(did)
+        if dev_dt_id is None:
+            results.append({"device_id": did, "success": False, "reason": "设备未注册，无法确定设备类型"})
+            failed_count += 1
+            continue
+
+        if dev_dt_id != policy.device_type_id:
+            dt_name = DEVICE_TYPES.get(dev_dt_id, DeviceType(id="", name="未知", description=None, register_templates=[], created_at=_now(), updated_at=_now())).name
+            policy_dt_name = DEVICE_TYPES.get(policy.device_type_id, DeviceType(id="", name="未知", description=None, register_templates=[], created_at=_now(), updated_at=_now())).name
+            results.append({
+                "device_id": did,
+                "success": False,
+                "reason": f"设备类型不匹配: 设备属于「{dt_name}」，策略要求「{policy_dt_name}」"
+            })
+            failed_count += 1
+            continue
+
         try:
             existing = None
             for a in APPLICATIONS.values():
@@ -477,6 +594,7 @@ def batch_apply_policy(policy_id: str, device_ids: List[str]) -> BatchApplyRespo
             results.append({"device_id": did, "success": False, "reason": str(e)})
             failed_count += 1
 
+    _save_applications()
     return BatchApplyResponse(success=success_count, failed=failed_count, results=results)
 
 
@@ -515,8 +633,34 @@ def get_device_applied_rules(device_id: str) -> DeviceAppliedRules:
 
 
 def unapply_policy(device_id: str) -> bool:
+    changed = False
     for aid in list(APPLICATIONS.keys()):
         if APPLICATIONS[aid].device_id == device_id:
             del APPLICATIONS[aid]
-            return True
+            changed = True
+    if changed:
+        _save_applications()
+        return True
     return False
+
+
+def list_registered_devices() -> List[Dict[str, Any]]:
+    result = []
+    for device_id, dt_id in DEVICE_TYPE_MAP.items():
+        dt = DEVICE_TYPES.get(dt_id)
+        applied = None
+        for a in APPLICATIONS.values():
+            if a.device_id == device_id:
+                applied = a
+                break
+        result.append({
+            "device_id": device_id,
+            "device_type_id": dt_id,
+            "device_type_name": dt.name if dt else "未知",
+            "applied_policy_id": applied.policy_id if applied else None,
+            "applied_policy_name": POLICIES.get(applied.policy_id).name if applied and POLICIES.get(applied.policy_id) else None,
+        })
+    return result
+
+
+init_mock_data()

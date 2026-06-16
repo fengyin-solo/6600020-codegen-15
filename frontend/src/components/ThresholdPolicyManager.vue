@@ -389,7 +389,14 @@ const currentTypeRegisters = computed(() => {
 const compatibleDevices = computed(() => {
   if (!applyingPolicy.value) return store.devices
   const targetDtId = applyingPolicy.value.deviceTypeId
-  return store.devices.filter(d => store.guessDeviceTypeId(d) === targetDtId)
+  return store.devices.filter(d => {
+    const applied = store.deviceRulesMap[d.id]
+    if (applied?.policyId) {
+      const policy = store.policies.find(p => p.id === applied.policyId)
+      if (policy?.deviceTypeId === targetDtId) return true
+    }
+    return store.guessDeviceTypeId(d) === targetDtId
+  })
 })
 
 const incompatibleDevices = computed(() => {

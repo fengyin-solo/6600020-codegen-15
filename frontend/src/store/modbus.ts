@@ -274,6 +274,21 @@ export const useModbusStore = defineStore('modbus', () => {
     }
   }
 
+  async function registerDevicesToBackend() {
+    const devicesToRegister = devices.value.map(d => ({
+      deviceId: d.id,
+      deviceTypeId: guessDeviceTypeId(d)
+    })).filter(d => d.deviceTypeId)
+
+    if (!devicesToRegister.length) return
+
+    try {
+      await apiPost('/devices/batch-register', { devices: devicesToRegister })
+    } catch (e) {
+      console.warn('设备注册跳过', e)
+    }
+  }
+
   function guessDeviceTypeId(device: Device): string | null {
     const registerNames = device.registers.map(r => r.name).sort().join(',')
     const patterns: Record<string, string> = {
@@ -292,6 +307,6 @@ export const useModbusStore = defineStore('modbus', () => {
     initMockDevices, simulatePoll, acknowledgeAlarm, toggleDevice,
     loadDeviceTypes, loadPolicies, loadApplications, loadDeviceAppliedRules, loadAllDeviceRules,
     createPolicy, updatePolicy, deletePolicy, batchApplyPolicy, unapplyPolicyFromDevice,
-    guessDeviceTypeId
+    registerDevicesToBackend, guessDeviceTypeId
   }
 })
